@@ -1,0 +1,518 @@
+```html
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GIS Visualization Tool</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        body {
+            font-family: Arial, sans-serif;
+            display: flex;
+            height: 100vh;
+            overflow: hidden;
+        }
+        #sidebar {
+            width: 300px;
+            background: #2c3e50;
+            color: white;
+            padding: 20px;
+            overflow-y: auto;
+        }
+        #map {
+            flex: 1;
+            height: 100%;
+        }
+        .section {
+            margin-bottom: 20px;
+            padding: 15px;
+            background: #34495e;
+            border-radius: 5px;
+        }
+        .section h3 {
+            margin-bottom: 10px;
+            font-size: 16px;
+        }
+        input[type="file"],
+        input[type="text"],
+        input[type="number"],
+        input[type="color"],
+        select {
+            width: 100%;
+            padding: 8px;
+            margin: 5px 0;
+            border: none;
+            border-radius: 3px;
+        }
+        button {
+            width: 100%;
+            padding: 10px;
+            margin: 5px 0;
+            background: #3498db;
+            color: white;
+            border: none;
+            border-radius: 3px;
+            cursor: pointer;
+        }
+        button:hover {
+            background: #2980b9;
+        }
+        .layer-item {
+            padding: 10px;
+            margin: 5px 0;
+            background: #2c3e50;
+            border-radius: 3px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .layer-controls {
+            display: flex;
+            gap: 5px;
+        }
+        .layer-controls button {
+            width: auto;
+            padding: 5px 10px;
+            font-size: 12px;
+        }
+        label {
+            display: block;
+            margin: 10px 0 5px 0;
+            font-size: 14px;
+        }
+        .checkbox-label {
+            display: flex;
+            align-items: center;
+            gap: 5px;
+        }
+        .checkbox-label input[type="checkbox"] {
+            width: auto;
+        }
+    </style>
+</head>
+<body>
+    <div id="sidebar">
+        <h2>GIS Tool</h2>
+        
+        <div class="section">
+            <h3>Upload Data</h3>
+            <label>GeoJSON:</label>
+            <input type="file" id="geojsonFile" accept=".geojson,.json">
+            <label>Shapefile (.shp, .shx, .dbf):</label>
+            <input type="file" id="shapefileFiles" accept=".shp,.shx,.dbf" multiple>
+            <button id="uploadBtn">Load File</button>
+        </div>
+
+        <div class="section">
+            <h3>Layers</h3>
+            <div id="layersList"></div>
+        </div>
+
+        <div class="section">
+            <h3>Style Settings</h3>
+            <label>Layer:</label>
+            <select id="styleLayerSelect"></select>
+            <label>Fill Color:</label>
+            <input type="color" id="fillColor" value="#3388ff">
+            <label>Stroke Color:</label>
+            <input type="color" id="strokeColor" value="#000000">
+            <label>Opacity:</label>
+            <input type="number" id="opacity" min="0" max="1" step="0.1" value="0.6">
+            <button id="applyStyleBtn">Apply Style</button>
+        </div>
+
+        <div class="section">
+            <h3>Classify by Attribute</h3>
+            <label>Layer:</label>
+            <select id="classifyLayerSelect"></select>
+            <label>Attribute:</label>
+            <select id="classifyAttribute"></select>
+            <label>Number of Classes:</label>
+            <input type="number" id="numClasses" min="2" max="10" value="5">
+            <button id="classifyBtn">Classify</button>
+        </div>
+
+        <div class="section">
+            <h3>Labels</h3>
+            <label>Layer:</label>
+            <select id="labelLayerSelect"></select>
+            <label>Label Field:</label>
+            <select id="labelField"></select>
+            <label class="checkbox-label">
+                <input type="checkbox" id="showLabels">
+                Show Labels
+            </label>
+        </div>
+
+        <div class="section">
+            <h3>Filter</h3>
+            <label>Layer:</label>
+            <select id="filterLayerSelect"></select>
+            <label>Attribute:</label>
+            <select id="filterAttribute"></select>
+            <label>Value:</label>
+            <input type="text" id="filterValue" placeholder="Enter value">
+            <button id="applyFilterBtn">Apply Filter</button>
+            <button id="clearFilterBtn">Clear Filter</button>
+        </div>
+    </div>
+
+    <div id="map"></div>
+
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/shpjs/3.6.3/shp.min.js"></script>
+    <script>
+        const map = L.map('map').setView([35.6762, 139.6503], 5);
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            attribution: '© OpenStreetMap contributors'
+        }).addTo(map);
+
+        let layers = [];
+        let layerData = [];
+        let labelLayers = [];
+
+        function generateColors(num) {
+            const colors = [];
+            for (let i = 0; i < num; i++) {
+                const hue = (i * 360) / num;
+                colors.push(`hsl(${hue}, 70%, 50%)`);
+            }
+            return colors;
+        }
+
+        function addLayer(geojson, name) {
+            const layer = L.geoJSON(geojson, {
+                style: {
+                    fillColor: '#3388ff',
+                    color: '#000000',
+                    weight: 2,
+                    opacity: 1,
+                    fillOpacity: 0.6
+                },
+                onEachFeature: (feature, layer) => {
+                    if (feature.properties) {
+                        let popup = '<div>';
+                        for (let key in feature.properties) {
+                            popup += `<b>${key}:</b> ${feature.properties[key]}<br>`;
+                        }
+                        popup += '</div>';
+                        layer.bindPopup(popup);
+                    }
+                }
+            }).addTo(map);
+
+            layers.push({name, layer, geojson, visible: true, filtered: null});
+            updateLayersList();
+            updateSelects();
+            map.fitBounds(layer.getBounds());
+        }
+
+        function updateLayersList() {
+            const list = document.getElementById('layersList');
+            list.innerHTML = '';
+            layers.forEach((item, index) => {
+                const div = document.createElement('div');
+                div.className = 'layer-item';
+                div.innerHTML = `
+                    <span>${item.name}</span>
+                    <div class="layer-controls">
+                        <button onclick="toggleLayer(${index})">${item.visible ? 'Hide' : 'Show'}</button>
+                        <button onclick="removeLayer(${index})">Remove</button>
+                    </div>
+                `;
+                list.appendChild(div);
+            });
+        }
+
+        function updateSelects() {
+            const selects = [
+                document.getElementById('styleLayerSelect'),
+                document.getElementById('classifyLayerSelect'),
+                document.getElementById('labelLayerSelect'),
+                document.getElementById('filterLayerSelect')
+            ];
+            
+            selects.forEach(select => {
+                select.innerHTML = '<option value="">Select Layer</option>';
+                layers.forEach((item, index) => {
+                    const option = document.createElement('option');
+                    option.value = index;
+                    option.textContent = item.name;
+                    select.appendChild(option);
+                });
+            });
+        }
+
+        function toggleLayer(index) {
+            const item = layers[index];
+            if (item.visible) {
+                map.removeLayer(item.layer);
+                item.visible = false;
+            } else {
+                map.addLayer(item.layer);
+                item.visible = true;
+            }
+            updateLayersList();
+        }
+
+        function removeLayer(index) {
+            const item = layers[index];
+            map.removeLayer(item.layer);
+            layers.splice(index, 1);
+            updateLayersList();
+            updateSelects();
+        }
+
+        function updateAttributeSelect(layerIndex, selectId) {
+            const select = document.getElementById(selectId);
+            select.innerHTML = '<option value="">Select Attribute</option>';
+            
+            if (layerIndex !== '' && layers[layerIndex]) {
+                const features = layers[layerIndex].geojson.features;
+                if (features && features.length > 0 && features[0].properties) {
+                    Object.keys(features[0].properties).forEach(key => {
+                        const option = document.createElement('option');
+                        option.value = key;
+                        option.textContent = key;
+                        select.appendChild(option);
+                    });
+                }
+            }
+        }
+
+        document.getElementById('uploadBtn').addEventListener('click', async () => {
+            const geojsonFile = document.getElementById('geojsonFile').files[0];
+            const shapefileFiles = document.getElementById('shapefileFiles').files;
+
+            if (geojsonFile) {
+                const text = await geojsonFile.text();
+                const geojson = JSON.parse(text);
+                addLayer(geojson, geojsonFile.name);
+            } else if (shapefileFiles.length > 0) {
+                const files = {};
+                for (let file of shapefileFiles) {
+                    const ext = file.name.split('.').pop();
+                    files[ext] = await file.arrayBuffer();
+                }
+
+                if (files.shp && files.shx && files.dbf) {
+                    const geojson = await shp.parseZip(
+                        new Blob([files.shp, files.shx, files.dbf])
+                    );
+                    addLayer(geojson, 'Shapefile');
+                }
+            }
+        });
+
+        document.getElementById('applyStyleBtn').addEventListener('click', () => {
+            const index = document.getElementById('styleLayerSelect').value;
+            if (index === '') return;
+
+            const fillColor = document.getElementById('fillColor').value;
+            const strokeColor = document.getElementById('strokeColor').value;
+            const opacity = parseFloat(document.getElementById('opacity').value);
+
+            const item = layers[index];
+            map.removeLayer(item.layer);
+            
+            item.layer = L.geoJSON(item.geojson, {
+                style: {
+                    fillColor: fillColor,
+                    color: strokeColor,
+                    weight: 2,
+                    opacity: 1,
+                    fillOpacity: opacity
+                },
+                onEachFeature: (feature, layer) => {
+                    if (feature.properties) {
+                        let popup = '<div>';
+                        for (let key in feature.properties) {
+                            popup += `<b>${key}:</b> ${feature.properties[key]}<br>`;
+                        }
+                        popup += '</div>';
+                        layer.bindPopup(popup);
+                    }
+                }
+            });
+
+            if (item.visible) {
+                item.layer.addTo(map);
+            }
+        });
+
+        document.getElementById('classifyBtn').addEventListener('click', () => {
+            const index = document.getElementById('classifyLayerSelect').value;
+            const attribute = document.getElementById('classifyAttribute').value;
+            const numClasses = parseInt(document.getElementById('numClasses').value);
+
+            if (index === '' || !attribute) return;
+
+            const item = layers[index];
+            const values = item.geojson.features
+                .map(f => parseFloat(f.properties[attribute]))
+                .filter(v => !isNaN(v))
+                .sort((a, b) => a - b);
+
+            if (values.length === 0) return;
+
+            const min = values[0];
+            const max = values[values.length - 1];
+            const range = (max - min) / numClasses;
+            const colors = generateColors(numClasses);
+
+            map.removeLayer(item.layer);
+            
+            item.layer = L.geoJSON(item.geojson, {
+                style: (feature) => {
+                    const value = parseFloat(feature.properties[attribute]);
+                    if (isNaN(value)) return {fillColor: '#cccccc', color: '#000000', weight: 2, fillOpacity: 0.6};
+                    
+                    const classIndex = Math.min(Math.floor((value - min) / range), numClasses - 1);
+                    return {
+                        fillColor: colors[classIndex],
+                        color: '#000000',
+                        weight: 2,
+                        opacity: 1,
+                        fillOpacity: 0.6
+                    };
+                },
+                onEachFeature: (feature, layer) => {
+                    if (feature.properties) {
+                        let popup = '<div>';
+                        for (let key in feature.properties) {
+                            popup += `<b>${key}:</b> ${feature.properties[key]}<br>`;
+                        }
+                        popup += '</div>';
+                        layer.bindPopup(popup);
+                    }
+                }
+            });
+
+            if (item.visible) {
+                item.layer.addTo(map);
+            }
+        });
+
+        document.getElementById('showLabels').addEventListener('change', (e) => {
+            const index = document.getElementById('labelLayerSelect').value;
+            const field = document.getElementById('labelField').value;
+
+            labelLayers.forEach(l => map.removeLayer(l));
+            labelLayers = [];
+
+            if (e.target.checked && index !== '' && field) {
+                const item = layers[index];
+                item.geojson.features.forEach(feature => {
+                    if (feature.geometry.type === 'Point') {
+                        const coords = feature.geometry.coordinates;
+                        const label = L.marker([coords[1], coords[0]], {
+                            icon: L.divIcon({
+                                className: 'label-icon',
+                                html: `<div style="background:white;padding:2px 5px;border:1px solid black;border-radius:3px;font-size:12px;">${feature.properties[field]}</div>`,
+                                iconSize: null
+                            })
+                        }).addTo(map);
+                        labelLayers.push(label);
+                    } else if (feature.geometry.type === 'Polygon' || feature.geometry.type === 'MultiPolygon') {
+                        const layer = L.geoJSON(feature);
+                        const center = layer.getBounds().getCenter();
+                        const label = L.marker(center, {
+                            icon: L.divIcon({
+                                className: 'label-icon',
+                                html: `<div style="background:white;padding:2px 5px;border:1px solid black;border-radius:3px;font-size:12px;">${feature.properties[field]}</div>`,
+                                iconSize: null
+                            })
+                        }).addTo(map);
+                        labelLayers.push(label);
+                    }
+                });
+            }
+        });
+
+        document.getElementById('applyFilterBtn').addEventListener('click', () => {
+            const index = document.getElementById('filterLayerSelect').value;
+            const attribute = document.getElementById('filterAttribute').value;
+            const value = document.getElementById('filterValue').value;
+
+            if (index === '' || !attribute || !value) return;
+
+            const item = layers[index];
+            const filtered = {
+                type: 'FeatureCollection',
+                features: item.geojson.features.filter(f => 
+                    String(f.properties[attribute]).toLowerCase().includes(value.toLowerCase())
+                )
+            };
+
+            map.removeLayer(item.layer);
+            item.filtered = item.geojson;
+            item.geojson = filtered;
+            
+            item.layer = L.geoJSON(filtered, {
+                style: item.layer.options.style,
+                onEachFeature: (feature, layer) => {
+                    if (feature.properties) {
+                        let popup = '<div>';
+                        for (let key in feature.properties) {
+                            popup += `<b>${key}:</b> ${feature.properties[key]}<br>`;
+                        }
+                        popup += '</div>';
+                        layer.bindPopup(popup);
+                    }
+                }
+            });
+
+            if (item.visible) {
+                item.layer.addTo(map);
+            }
+        });
+
+        document.getElementById('clearFilterBtn').addEventListener('click', () => {
+            const index = document.getElementById('filterLayerSelect').value;
+            if (index === '' || !layers[index].filtered) return;
+
+            const item = layers[index];
+            item.geojson = item.filtered;
+            item.filtered = null;
+
+            map.removeLayer(item.layer);
+            item.layer = L.geoJSON(item.geojson, {
+                style: item.layer.options.style,
+                onEachFeature: (feature, layer) => {
+                    if (feature.properties) {
+                        let popup = '<div>';
+                        for (let key in feature.properties) {
+                            popup += `<b>${key}:</b> ${feature.properties[key]}<br>`;
+                        }
+                        popup += '</div>';
+                        layer.bindPopup(popup);
+                    }
+                }
+            });
+
+            if (item.visible) {
+                item.layer.addTo(map);
+            }
+        });
+
+        document.getElementById('classifyLayerSelect').addEventListener('change', (e) => {
+            updateAttributeSelect(e.target.value, 'classifyAttribute');
+        });
+
+        document.getElementById('labelLayerSelect').addEventListener('change', (e) => {
+            updateAttributeSelect(e.target.value, 'labelField');
+        });
+
+        document.getElementById('filterLayerSelect').addEventListener('change', (e) => {
+            updateAttributeSelect(e.target.value, 'filterAttribute');
+        });
+    </script>
+</body>
+</html>
+```
